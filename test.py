@@ -22,11 +22,10 @@ def test_agent(args):
 
     # 创建智能体
     agent = Soft_DQN_Agent(state_dim, action_dim, args.hidden_dim,
-                           alpha=args.alpha,
                            gamma=args.gamma,
                            lr=args.lr,
                            update_tau=args.update_tau,
-                           epsilon_start=args.epsilon_start,
+                           epsilon=args.epsilon,
                            clip_norm=args.clip_norm,
                            device=args.device)
 

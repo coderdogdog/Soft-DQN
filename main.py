@@ -41,16 +41,11 @@ def parse_args():
     parser.add_argument("--load_name2", type=str, default="trained_10000_Q2.pth", help="导入模型文件名")
 
     # 环境
-    parser.add_argument("--env_name", type=str, default="CartPole-v1",
+    parser.add_argument("--env_name", type=str, default="LunarLander-v3",
                         help="LunarLander-v3, CartPole-v1, MountainCar-v0")
 
-    parser.add_argument("--alpha", type=float, default=1.0, help="温度系数")
-
     # epsilon
-    parser.add_argument("--epsilon_start", type=float, default=0.8, help="epsilon 初始值")
-    parser.add_argument("--epsilon_end", type=float, default=0.01, help="epsilon 最终值")
-    parser.add_argument("--total_decay_steps", type=int, default=30_000, help="epsilon 衰减总步数 按更新次数计")
-
+    parser.add_argument("--epsilon", type=float, default=0.02, help="epsilon 极小值 设置安全网，避免坠入局部最优")
     # 训练
     parser.add_argument("--warmup_steps", type=int, default=5000, help="先预热 随机选取动作积累经验 先走几步")
     parser.add_argument("--max_env_steps", type=int, default=1_000_000, help="环境最大运行总步数")
@@ -60,8 +55,6 @@ def parse_args():
 
     parser.add_argument("--hidden_dim", type=int, default=256,
                         help="网络的隐藏层大小，例如：--hidden_dim 256")
-    parser.add_argument("--embed_dim", type=int, default=64,
-                        help="分位数嵌入维度，例如：--embed_dim 64")
 
     parser.add_argument("--buffer_max_len", type=int, default=int(1e6), help="经验回放池长度")
     parser.add_argument("--batch_size", type=int, default=256, help="训练时batch_size")

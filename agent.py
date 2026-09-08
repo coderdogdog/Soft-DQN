@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
+from math import log
 import torch
+import torch.nn as nn
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
+from torch.distributions import Categorical
+
 from net import Soft_Qnet
 
 
@@ -44,22 +48,14 @@ class ReplayBuffer:
                 self.dones[indices])
 
 
-def update_epsilon(current_step, total_decay_step=50000, epsilon_start=0.8, epsilon_end=0.01):
-    if current_step < total_decay_step:
-        epsilon = epsilon_start - (epsilon_start - epsilon_end) * current_step / total_decay_step
-    else:
-        epsilon = epsilon_end
-    return epsilon
-
-
 # --------------------------------------- 智能体设置 ---------------------------------------------
 class Soft_DQN_Agent:
     def __init__(self, state_dim: int, action_dim: int, hid_dim: int,
-                 alpha,
                  gamma=0.99,
                  lr=5e-4,
+                 lr_alpha=1e-3,
                  update_tau=0.01,
-                 epsilon_start=0.8,
+                 epsilon=0.02,          # 作为“安全网”，防止因Q值估计不准导致策略过早陷入局部最优
                  clip_norm=1.0,
                  device="cpu"):
 
@@ -76,8 +72,19 @@ class Soft_DQN_Agent:
             lr=lr
         )
 
+        # ----------------- 温度参数 alpha 训练 --------------------------
+        # 目标熵，离散动作空间一般用 目标熵 = 0.98 × (-log(1 / |A|))
+        self.target_entropy = 0.98 * (-log(1 / action_dim))
+
+        # 温度系数初始化
+        self.log_alpha = nn.Parameter(torch.zeros(1, device=device))
+        self.alpha = self.log_alpha.exp()
+
+        self.alpha_optimizer = optim.Adam([self.log_alpha], lr=lr_alpha)
+        # -----------------------------------------------------------------
+
         # 超参数
-        self.alpha = alpha                  # 温度系数
+        self.epsilon = epsilon              # epsilon 作为“安全网”，防止因Q值估计不准导致策略过早陷入局部最优
         self.gamma = gamma                  # 折扣因子
         self.update_tau = update_tau        # 目标网络软更新系数
         # 梯度裁剪
@@ -85,27 +92,36 @@ class Soft_DQN_Agent:
 
         self.action_dim = action_dim
         self.dvc = device
-        self.epsilon = epsilon_start             # epsilon
+
         self.train_num = 0
 
     # ----------------------------------- 选择动作 -----------------------------------
     def select_action(self, state, explore=True):
 
-        if explore:
-            # 生成[0, 1) 区间的均匀分布随机浮点数
-            if np.random.rand() < self.epsilon:
-                action = np.random.randint(0, self.action_dim)
-                return action
+        if explore and np.random.rand() < self.epsilon:   # 生成[0, 1) 区间的均匀分布随机浮点数
+            action = np.random.randint(0, self.action_dim)
+            return action
 
+        # 无论是否 explore，只要没触发随机，就走 Softmax
         with torch.no_grad():
             state = torch.tensor(state.reshape(1, -1), dtype=torch.float32).to(self.dvc)
             # 如果环境噪声大，想要动作价值估计更平滑，可以使用 (Q1+Q2)/2.0
-            # 这里直接使用第一个 Q 值
-            q_value = self.Q_net1(state)      # (1, action_dim)
+            # 这里直接使用第一个 Q 网络的值
+            q_values = self.Q_net1(state)        # shape: [1, action_dim]
 
-            action = q_value.argmax(dim=1).item()
-
-        return action
+            if explore:
+                # 训练模式：按Softmax概率采样
+                # 注意：温度系数 alpha 控制分布的"柔软度"
+                # alpha > 0
+                # 当 alpha 很大时，分布趋近于均匀分布（强探索）
+                # 当 alpha 很小时，分布趋近于 one-hot（强利用）
+                logits = q_values / self.alpha
+                probs = F.softmax(logits, dim=1)
+                dist = Categorical(probs)
+                action = dist.sample().item()
+                return action
+            else:
+                return q_values.argmax(dim=1).item()
 
     # ---------- 计算 target -----------
     def compute_soft_target(self, next_states, dones):
@@ -134,6 +150,9 @@ class Soft_DQN_Agent:
     def update(self, replay_buffer, batch_size, writer):
         self.train_num += 1
 
+        # 每次更新都从 log_alpha 重新解出当前 alpha
+        self.alpha = self.log_alpha.exp()  # 参与 alpha_loss 的梯度回传
+
         # ---------- 从经验池中采样 ----------
         state, action, reward, next_state, done = replay_buffer.sample(batch_size)
         # 转换为 PyTorch Tensor
@@ -159,9 +178,24 @@ class Soft_DQN_Agent:
         self.optimizer.zero_grad()
         loss.backward()
         # 梯度裁剪，防止梯度爆炸
-        grad_norm1 = torch.nn.utils.clip_grad_norm_(self.Q_net1.parameters(), max_norm=1.0)
-        grad_norm2 = torch.nn.utils.clip_grad_norm_(self.Q_net2.parameters(), max_norm=1.0)
+        grad_norm1 = torch.nn.utils.clip_grad_norm_(self.Q_net1.parameters(), max_norm=self.clip_norm)
+        grad_norm2 = torch.nn.utils.clip_grad_norm_(self.Q_net2.parameters(), max_norm=self.clip_norm)
         self.optimizer.step()
+
+        # ------------- 温度系数alpha更新 -------------------
+        with torch.no_grad():
+            # 计算出动作的对数概率 log_p
+            new_logits = current_q1 / self.alpha
+            new_probs = F.softmax(new_logits, dim=1)
+            actions_p = new_probs.gather(1, actions)
+            new_log_p = torch.log(actions_p)
+
+        alpha_loss = -self.alpha * (new_log_p.detach() + self.target_entropy).mean()
+
+        self.alpha_optimizer.zero_grad()
+        alpha_loss.backward()
+        self.alpha_optimizer.step()
+        # --------------------------------------------------
 
         # 软更新目标网络
         for param, target_param in zip(self.Q_net1.parameters(), self.targetQ_net1.parameters()):

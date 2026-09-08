@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 import os
 from torch.utils.tensorboard import SummaryWriter
-from agent import Soft_DQN_Agent, ReplayBuffer, update_epsilon
+from agent import Soft_DQN_Agent, ReplayBuffer
 from utils import evaluate_agent, args_to_txt, set_seed
 
 
@@ -53,16 +53,14 @@ def train_agent(args):
     buffer = ReplayBuffer(args.buffer_max_len, state_dim)
 
     agent = Soft_DQN_Agent(state_dim, action_dim, args.hidden_dim,
-                          alpha=args.alpha,
                           gamma=args.gamma,
                           lr=args.lr,
                           update_tau=args.update_tau,
-                          epsilon_start=args.epsilon_start,
+                          epsilon=args.epsilon,
                           clip_norm=args.clip_norm,
                           device=args.device)
     # -------------------------------------------------------------------------------------------------------
     total_steps = 0
-    decay_steps = 0         # epsilon 衰减步数
 
     best_avg_reward = -float(1000)
     print("[新训练] 开始训练...")
@@ -100,8 +98,6 @@ def train_agent(args):
                 # --------------------------------- 训练更新 -----------------------------------------
                 if total_steps % args.train_frequency == 0:
                     agent.update(buffer, args.batch_size, writer)
-                    decay_steps += 1        # epsilon 衰减
-                    agent.epsilon = update_epsilon(decay_steps, args.total_decay_steps, args.epsilon_start, args.epsilon_end)
 
                     # ------------------- 测试 ----------------------
                     if agent.train_num % args.eval_interval == 0:
