@@ -15,9 +15,8 @@ pip3 install --pre torch torchvision --index-url https://download.pytorch.org/wh
 python main.py --is_test_mode 0 --env_name "LunarLander-v3"
 
 测试指定模型：
-python main.py --is_test_mode 1 --env_name "LunarLander-v3" --load_name1 trained_10000_Q1.pth --load_name2 trained_10000_Q2.pth
-
-agent.py 里的 Soft_DQN_Agent 类中内置了 温度系数的上下限
+python main.py --is_test_mode 1 --env_name "LunarLander-v3" --load_name1 trained_130000_Q1.pth --load_name2 trained_130000_Q2.pth
+agent.py 里的 Soft_DQN_Agent 类中内置了 温度系数自动调节
 
 """
 

@@ -57,8 +57,8 @@ class Soft_DQN_Agent:
                  update_tau=0.01,
                  epsilon=0.02,          # 作为“安全网”，防止因Q值估计不准导致策略过早陷入局部最优
                  clip_norm=1.0,
-                 alpha_min=1e-3,        # 温度系数下限，防止 α→0 时 q/α 数值溢出
-                 alpha_max=1e2,         # 温度系数上限，防止 α 过大导致软目标膨胀
+                 # alpha_min=1e-3,        # 温度系数下限，防止 α→0 时 q/α 数值溢出
+                 # alpha_max=1e2,         # 温度系数上限，防止 α 过大导致软目标膨胀
                  device="cpu"):
 
         self.Q_net1 = Soft_Qnet(state_dim, action_dim, hid_dim).to(device)
@@ -75,10 +75,11 @@ class Soft_DQN_Agent:
         )
 
         # ----------------- 温度参数 alpha 训练 --------------------------
-        # 目标熵，离散动作空间一般用 目标熵 = 0.98 × log(|A|)
-        # 比较好的方法是 目标熵设置的比平均熵小，让 alpha 逐渐降低
-        self.target_entropy = 0.98 * math.log(action_dim)
-        # self.target_entropy = 0.5 * math.log(action_dim)
+        # 目标熵，离散动作空间一般用 目标熵 可以设置 0.7 × log(|A|) 或者 0.5 × log(|A|)
+        # 监控 策略熵 和 alpha 的变化，选取合适的 目标熵
+        # 目标熵设置的大：策略平，偏探索；目标熵设置的小：策略尖，偏利用；
+        # 稀疏奖励、需要长期被迫探索的环境 可以用较大的目标熵
+        self.target_entropy = 0.5 * math.log(action_dim)
 
         # 温度系数初始化
         self.log_alpha = nn.Parameter(torch.zeros(1, device=device))
@@ -87,8 +88,8 @@ class Soft_DQN_Agent:
         self.alpha_optimizer = optim.Adam([self.log_alpha], lr=lr_alpha)
 
         # 温度系数上下限
-        self.alpha_min = alpha_min
-        self.alpha_max = alpha_max
+        # self.alpha_min = alpha_min
+        # self.alpha_max = alpha_max
         # -----------------------------------------------------------------
 
         # 超参数
