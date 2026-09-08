@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from math import log
+import math
 import torch
 import torch.nn as nn
 import numpy as np
@@ -53,10 +53,12 @@ class Soft_DQN_Agent:
     def __init__(self, state_dim: int, action_dim: int, hid_dim: int,
                  gamma=0.99,
                  lr=5e-4,
-                 lr_alpha=1e-3,
+                 lr_alpha=5e-4,
                  update_tau=0.01,
                  epsilon=0.02,          # 作为“安全网”，防止因Q值估计不准导致策略过早陷入局部最优
                  clip_norm=1.0,
+                 alpha_min=1e-3,        # 温度系数下限，防止 α→0 时 q/α 数值溢出
+                 alpha_max=1e2,         # 温度系数上限，防止 α 过大导致软目标膨胀
                  device="cpu"):
 
         self.Q_net1 = Soft_Qnet(state_dim, action_dim, hid_dim).to(device)
@@ -73,14 +75,20 @@ class Soft_DQN_Agent:
         )
 
         # ----------------- 温度参数 alpha 训练 --------------------------
-        # 目标熵，离散动作空间一般用 目标熵 = 0.98 × (-log(1 / |A|))
-        self.target_entropy = 0.98 * (-log(1 / action_dim))
+        # 目标熵，离散动作空间一般用 目标熵 = 0.98 × log(|A|)
+        # 比较好的方法是 目标熵设置的比平均熵小，让 alpha 逐渐降低
+        self.target_entropy = 0.98 * math.log(action_dim)
+        # self.target_entropy = 0.5 * math.log(action_dim)
 
         # 温度系数初始化
         self.log_alpha = nn.Parameter(torch.zeros(1, device=device))
         self.alpha = self.log_alpha.exp()
 
         self.alpha_optimizer = optim.Adam([self.log_alpha], lr=lr_alpha)
+
+        # 温度系数上下限
+        self.alpha_min = alpha_min
+        self.alpha_max = alpha_max
         # -----------------------------------------------------------------
 
         # 超参数
@@ -150,9 +158,6 @@ class Soft_DQN_Agent:
     def update(self, replay_buffer, batch_size, writer):
         self.train_num += 1
 
-        # 每次更新都从 log_alpha 重新解出当前 alpha
-        self.alpha = self.log_alpha.exp()  # 参与 alpha_loss 的梯度回传
-
         # ---------- 从经验池中采样 ----------
         state, action, reward, next_state, done = replay_buffer.sample(batch_size)
         # 转换为 PyTorch Tensor
@@ -184,17 +189,23 @@ class Soft_DQN_Agent:
 
         # ------------- 温度系数alpha更新 -------------------
         with torch.no_grad():
-            # 计算出动作的对数概率 log_p
-            new_logits = current_q1 / self.alpha
-            new_probs = F.softmax(new_logits, dim=1)
-            actions_p = new_probs.gather(1, actions)
-            new_log_p = torch.log(actions_p)
+            q1_all = self.Q_net1(states)        # [B, A]
+            logits = q1_all / self.alpha
+            log_probs = F.log_softmax(logits, dim=1)        # log π(a|s)
+            entropy = -(log_probs.exp() * log_probs).sum(dim=1)         # 每个状态的精确熵 [B]
+            entropy_mean = entropy.mean()  # E_{s~B}[ H(π(·|s)) ]
 
-        alpha_loss = -self.alpha * (new_log_p.detach() + self.target_entropy).mean()
+        # 最小化 J(α) = α·(E[H] − H̄)：熵低于目标 → 梯度为负 → α 上升；  高于目标 → α 下降
+        alpha_loss = self.alpha * (entropy_mean - self.target_entropy)
 
         self.alpha_optimizer.zero_grad()
         alpha_loss.backward()
         self.alpha_optimizer.step()
+
+        # 温度系数上下限保护：α→0 会使 q/α 溢出，α 过大会使软目标按 α·log|A| 膨胀
+        # with torch.no_grad():
+        #     self.log_alpha.clamp_(math.log(self.alpha_min), math.log(self.alpha_max))
+        self.alpha = self.log_alpha.exp()
         # --------------------------------------------------
 
         # 软更新目标网络
@@ -212,11 +223,13 @@ class Soft_DQN_Agent:
                 q_mean = current_q1.mean().item()
 
             # TensorBoard 记录
-            writer.add_scalar("Q_mean", q_mean, self.train_num)
-            writer.add_scalar("Loss", loss.item(), self.train_num)
-            writer.add_scalar("Grad_norm1", grad_norm1.item(), self.train_num)
-            writer.add_scalar("Grad_norm2", grad_norm2.item(), self.train_num)
-            writer.add_scalar("Epsilon", self.epsilon, self.train_num)
+            writer.add_scalar("Q_Net/Q_mean", q_mean, self.train_num)
+            writer.add_scalar("Q_Net/Q_Loss", loss.item(), self.train_num)
+            writer.add_scalar("Grad_norm/Q1_grad_norm", grad_norm1.item(), self.train_num)
+            writer.add_scalar("Grad_norm/Q2_grad_norm", grad_norm2.item(), self.train_num)
+            writer.add_scalar("Entropy", entropy_mean.item(), self.train_num)
+            writer.add_scalar("alpha", self.alpha.item(), self.train_num)
+            writer.add_scalar("alpha_loss", alpha_loss.item(), self.train_num)
 
     def save(self, path1, path2):
         """保存模型权重"""

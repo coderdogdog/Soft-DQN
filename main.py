@@ -17,6 +17,8 @@ python main.py --is_test_mode 0 --env_name "LunarLander-v3"
 测试指定模型：
 python main.py --is_test_mode 1 --env_name "LunarLander-v3" --load_name1 trained_10000_Q1.pth --load_name2 trained_10000_Q2.pth
 
+agent.py 里的 Soft_DQN_Agent 类中内置了 温度系数的上下限
+
 """
 
 
@@ -60,6 +62,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=256, help="训练时batch_size")
     parser.add_argument("--lr", type=float, default=5e-4, help="神经网络学习率")
     parser.add_argument("--gamma", type=float, default=0.99, help="折扣因子")
+    parser.add_argument("--lr_alpha", type=float, default=5e-4, help="温度系数学习率")
 
     parser.add_argument("--update_tau", type=float, default=0.01, help="滑动更新")
     parser.add_argument("--clip_norm", type=float, default=1.0, help="网络梯度裁剪阈值")

@@ -55,6 +55,7 @@ def train_agent(args):
     agent = Soft_DQN_Agent(state_dim, action_dim, args.hidden_dim,
                           gamma=args.gamma,
                           lr=args.lr,
+                          lr_alpha=args.lr_alpha,
                           update_tau=args.update_tau,
                           epsilon=args.epsilon,
                           clip_norm=args.clip_norm,
